@@ -47,56 +47,7 @@ The full idempotent SQL setup script is located at [`supabase/migrations/001_ini
 
 ---
 
-## Getting Started
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/djulTrb/cabinet_medical.git
-cd cabinet_medical
-```
-
-### 2. Install dependencies
-```bash
-npm install
-```
-
-### 3. Configure environment variables
-Copy `.env.example` to `.env` and fill in your Supabase project details:
-```bash
-cp .env.example .env
-```
-
-```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
-VITE_DOCTOR_EMAIL=cabinetmedical2025@cab.med
-```
-
-### 4. Set up Supabase
-1. Open your Supabase Dashboard → **SQL Editor → New query**.
-2. Run the contents of [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql).
-3. Create the doctor user in **Authentication → Users** (matching `VITE_DOCTOR_EMAIL`).
-
-### 5. Run the development server
-```bash
-npm run dev
-```
-
-### 6. Build for production
-```bash
-npm run build
-```
-
----
-
 ## Academic Context
 
-Developed as a Bachelor’s Thesis (*Mémoire de Licence*, Class of 2024/2025) at **Mouloud Mammeri University of Tizi Ouzou** — Faculty of Electrical Engineering and Computer Science, Department of Computer Science.
-
-**Authors:**
-- TAREB Djillali
-- DJAOUT Zina
-- TAOUCHE Lysa
-- SINI Abdelhak
-
-**Supervisor:** Mrs. Belattaf
+Developed as a Bachelor’s Thesis (*Mémoire de Licence*, Class of 2024/2025) at **Mouloud Mammeri University of Tizi Ouzou**
+Faculty of Electrical Engineering and Computer Science, Department of Computer Science.
