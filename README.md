@@ -35,18 +35,6 @@ A full-stack web application for managing a medical practice, built with **React
 
 ---
 
-## Database Schema
-
-The full idempotent SQL setup script is located at [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql) and includes:
-
-- **`profiles`** — User profiles (`id`, `email`, `full_name`, `avatar`, `avatar_url`, `role`: `'patient' | 'doctor'`). Automatically populated on signup via the `on_auth_user_created` trigger.
-- **`annonces`** — Clinic announcements (`idAnnonce`, `titre`, `contenu`, `photo`, `created_at`).
-- **`creneaux_bloques`** — Doctor-blocked days (`type_blocage = 'jour'`) and time slots (`type_blocage = 'heure'`).
-- **`rendez_vous`** — Patient appointment requests (`id`, `patient_id`, `patient_full_name`, `date_heure`, `type_rendez_vous`, `statut`, `note`, `telephone`), protected by a partial unique index preventing double-booking on active slots.
-- **`get_booked_slots()`** — `SECURITY DEFINER` RPC returning occupied timestamps without exposing other patients' personal details.
-
----
-
 ## Academic Context
 
 Developed as a Bachelor’s Thesis (*Mémoire de Licence*, Class of 2024/2025) at **Mouloud Mammeri University of Tizi Ouzou**
