@@ -6,6 +6,8 @@ export default {
     noAppointments: "ليس لديك مواعيد مخططة",
     close: "إغلاق",
     cancel: "إلغاء",
+    saving: "جاري الحفظ...",
+    loading: "جاري التحميل..."
   },
   validation: {
     required: "هذا الحقل مطلوب",
@@ -17,6 +19,7 @@ export default {
     invalidEmail: "بريد إلكتروني غير صالح",
     passwordComplexity: "يجب أن تحتوي كلمة المرور على حرف كبير وحرف صغير ورقم ورمز خاص على الأقل",
     fileTooLarge: "الملف كبير جداً (الحد الأقصى 5 ميجابايت)",
+    compressionError: "حدث خطأ أثناء ضغط الصورة",
   },
   nav: {
     home: "الرئيسية",
@@ -41,6 +44,7 @@ export default {
       title: "معلومات الملف الشخصي",
       photo: "الصورة الشخصية",
       change: "تغيير",
+      compressing: "جاري الضغط...",
       name: "الاسم",
       email: "البريد الإلكتروني",
       save: "حفظ",
@@ -57,6 +61,15 @@ export default {
       confirm: "تأكيد كلمة المرور الجديدة",
       change: "تغيير كلمة المرور",
       cancel: "إلغاء",
+      requirements: "يجب أن تستوفي كلمة المرور المعايير التالية:",
+      length: "8 أحرف على الأقل",
+      uppercase: "حرف كبير واحد على الأقل",
+      lowercase: "حرف صغير واحد على الأقل",
+      number: "رقم واحد على الأقل",
+      special: "رمز خاص واحد على الأقل",
+      incorrectCurrent: "كلمة المرور الحالية غير صحيحة",
+      success: "تم تغيير كلمة المرور بنجاح",
+      updateError: "حدث خطأ أثناء تغيير كلمة المرور",
     },
     disconnect: {
       title: "تسجيل الخروج",
@@ -83,6 +96,11 @@ export default {
     editAppointment: "تعديل الموعد",
     monthView: "عرض شهري",
     dayView: "عرض يومي",
+    appointmentAccepted: "تم قبول الموعد",
+    appointmentAcceptedMessage: "تم تأكيد موعدك. ننتظرك في التاريخ والوقت المحددين.",
+    appointmentDeclined: "تم رفض الموعد",
+    appointmentDeclinedMessage: "لم يتم قبول طلب موعدك. يمكنك طلب موعد جديد.",
+    requestNewAppointment: "طلب موعد جديد",
     appointmentTypes: {
       consultation: "استشارة",
       "follow-up": "متابعة",
@@ -119,12 +137,18 @@ export default {
       title: "المواعيد المتاحة"
     },
     status: {
+      en_attente: "قيد الانتظار",
+      accepte: "مقبول",
+      refuse: "مرفوض",
+      annule: "ملغي",
       pending: "قيد الانتظار",
       accepted: "مقبول",
       declined: "مرفوض",
       cancelled: "ملغي"
     },
     hasAppointment: "موعد",
+    appointment: "موعد",
+    slotAlreadyBooked: "تم حجز هذا الموعد للتو. يرجى اختيار موعد آخر.",
     blocked: "مغلق",
     available: "متاح",
     form: {
@@ -135,7 +159,8 @@ export default {
       optional: "اختياري",
       appointmentType: "نوع الموعد",
       note: "ملاحظة للطبيب",
-      submit: "طلب موعد"
+      submit: "طلب موعد",
+      submitting: "جاري الإرسال..."
     }
   },
   appointmentRequests: {
@@ -192,6 +217,8 @@ export default {
     verificationError: "خطأ في التحقق من الرمز",
     registrationError: "خطأ في التسجيل",
     loginError: "بيانات الدخول غير صحيحة",
+    emailNotConfirmed: "يرجى تأكيد بريدك الإلكتروني قبل تسجيل الدخول",
+    emailAlreadyExists: "يوجد حساب بالفعل بهذا البريد الإلكتروني",
     requiredFields: "جميع الحقول مطلوبة",
     noAccount: "ليس لديك حساب؟",
   },
@@ -235,4 +262,4 @@ export default {
     gynecologist: "طبيب نساء",
     pediatrician: "طبيب أطفال"
   },
-}; 
+};

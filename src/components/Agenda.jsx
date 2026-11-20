@@ -1,49 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
-import { Calendar, CaretLeft, CaretRight, Clock, Check, X, Plus, Lock, LockOpen, User, Note, List } from 'phosphor-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, parseISO, isSameHour, setHours, getHours, addDays, getMinutes } from 'date-fns';
-import { fr } from 'date-fns/locale';
+import { CaretLeft, CaretRight, Lock, LockOpen } from 'phosphor-react';
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  isSameMonth,
+  isSameDay,
+  addMonths,
+  subMonths,
+  parseISO,
+  addDays,
+  getHours,
+  getMinutes,
+  startOfDay
+} from 'date-fns';
 import { blockDay, unblockDay, blockHour, unblockHour, setBlockedTimes } from '../store/slices/appointmentsSlice';
-import { setSidebarOpen } from '../store/slices/sidebarSlice';
 import { supabase } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
-
-// Mock data for appointments - in a real app, this would come from an API
-const mockAppointments = [
-  {
-    id: 1,
-    patientId: 101,
-    patientName: 'Jean Dupont',
-    date: '2023-06-15T10:00:00',
-    status: 'pending', // pending, accepted, declined
-    type: 'consultation'
-  },
-  {
-    id: 2,
-    patientId: 102,
-    patientName: 'Marie Martin',
-    date: '2023-06-15T14:30:00',
-    status: 'accepted',
-    type: 'follow-up'
-  },
-  {
-    id: 3,
-    patientId: 103,
-    patientName: 'Pierre Durand',
-    date: '2023-06-20T09:15:00',
-    status: 'declined',
-    type: 'consultation'
-  }
-];
 
 // Generate time slots from 8 AM to 6 PM with 30-minute intervals
 const generateTimeSlots = () => {
   const slots = [];
   for (let hour = 8; hour <= 18; hour++) {
     slots.push({ hour, minutes: 0 });
-    if (hour !== 18) { // Don't add :30 for the last hour
+    if (hour !== 18) {
       slots.push({ hour, minutes: 30 });
     }
   }
@@ -55,14 +39,24 @@ const formatTimeSlot = (slot) => {
   return `${String(slot.hour).padStart(2, '0')}:${String(slot.minutes).padStart(2, '0')}`;
 };
 
+const normalizeDateKey = (dateVal) => {
+  if (!dateVal) return '';
+  if (typeof dateVal === 'string') return dateVal.slice(0, 10);
+  return format(dateVal, 'yyyy-MM-dd');
+};
+
 export default function Agenda() {
   const { t, i18n } = useTranslation();
   const dispatch = useDispatch();
   const user = useSelector((state) => state.user);
   const { blockedTimes } = useSelector((state) => state.appointments);
-  const isOpen = useSelector((state) => state.sidebar.isOpen);
+  const normalizedRole = (user.role || '').toLowerCase();
+  const isDoctor = normalizedRole === 'doctor';
+  const isPatient = normalizedRole === 'patient';
+
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [appointments, setAppointments] = useState(mockAppointments);
+  const [appointments, setAppointments] = useState([]);
+  const [occupiedSlots, setOccupiedSlots] = useState([]);
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedHour, setSelectedHour] = useState(null);
   const [selectedMinutes, setSelectedMinutes] = useState(null);
@@ -70,18 +64,18 @@ export default function Agenda() {
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
   const [showBlockModal, setShowBlockModal] = useState(false);
   const [showAppointmentForm, setShowAppointmentForm] = useState(false);
-  const [showConfirmation, setShowConfirmation] = useState(false);
   const [hasActiveAppointment, setHasActiveAppointment] = useState(false);
   const [activeAppointment, setActiveAppointment] = useState(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [isStacked, setIsStacked] = useState(false);
-  const [isLargeScreen, setIsLargeScreen] = useState(window.innerWidth >= 800);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
   const timeSlots = generateTimeSlots();
-  const minAppointmentDate = addDays(new Date(), 2); // Minimum date is 2 days from now
-  
-  // Form state using React Hook Form
+  const todayStart = startOfDay(new Date());
+  const minPatientDate = startOfDay(addDays(new Date(), 2)); // Minimum date for patients is 2 days from now
+  const maxAllowedDate = startOfDay(addMonths(new Date(), 3));
+
   const { register, handleSubmit, formState: { errors }, reset } = useForm({
     defaultValues: {
       phone: '',
@@ -93,30 +87,60 @@ export default function Agenda() {
   // Check if a time slot is blocked
   const isTimeSlotBlocked = (date, timeSlot) => {
     const formattedDate = format(date, 'yyyy-MM-dd');
-    return blockedTimes.hours.some(
-      block => block.date === formattedDate && 
-      block.hour === timeSlot.hour && 
-      block.minutes === timeSlot.minutes
-    ) || blockedTimes.days.includes(formattedDate);
+    return (
+      blockedTimes.hours.some(
+        block =>
+          block.date === formattedDate &&
+          block.hour === timeSlot.hour &&
+          block.minutes === timeSlot.minutes
+      ) || blockedTimes.days.includes(formattedDate)
+    );
   };
 
-  // Get appointments for a specific time slot
+  // Get appointments (including globally occupied slots) for a specific time slot
   const getAppointmentsForTimeSlot = (date, timeSlot) => {
-    return appointments.filter(appointment => {
+    const matchedOwn = appointments.filter(appointment => {
+      if (!appointment.date) return false;
       const appointmentDate = parseISO(appointment.date);
-      return isSameDay(appointmentDate, date) && 
-             getHours(appointmentDate) === timeSlot.hour &&
-             getMinutes(appointmentDate) === timeSlot.minutes &&
-             (appointment.status === 'accepte' || appointment.status === 'en_attente');
+      return (
+        isSameDay(appointmentDate, date) &&
+        getHours(appointmentDate) === timeSlot.hour &&
+        getMinutes(appointmentDate) === timeSlot.minutes &&
+        (appointment.status === 'accepte' || appointment.status === 'en_attente')
+      );
+    });
+
+    if (matchedOwn.length > 0 || isDoctor) {
+      return matchedOwn;
+    }
+
+    // For patients, also check other patients' occupied slots without exposing their details
+    return occupiedSlots.filter(slot => {
+      if (!slot.date) return false;
+      const slotDate = parseISO(slot.date);
+      return (
+        isSameDay(slotDate, date) &&
+        getHours(slotDate) === timeSlot.hour &&
+        getMinutes(slotDate) === timeSlot.minutes &&
+        (slot.status === 'accepte' || slot.status === 'en_attente')
+      );
     });
   };
 
-  // Handle blocking/unblocking a time slot
+  // Handle blocking/unblocking a time slot (doctor only)
   const handleTimeSlotBlock = async (date, timeSlot) => {
+    if (!isDoctor) return;
     try {
+      setError(null);
       const formattedDate = format(date, 'yyyy-MM-dd');
-      if (isTimeSlotBlocked(date, timeSlot)) {
-        // Unblock: delete from creneaux_bloques
+      const isSpecificSlotBlocked = blockedTimes.hours.some(
+        block =>
+          block.date === formattedDate &&
+          block.hour === timeSlot.hour &&
+          block.minutes === timeSlot.minutes
+      );
+
+      if (isSpecificSlotBlocked) {
         const { error: deleteError } = await supabase
           .from('creneaux_bloques')
           .delete()
@@ -127,37 +151,41 @@ export default function Agenda() {
 
         if (deleteError) throw deleteError;
 
-        dispatch(unblockHour({ 
-          date: formattedDate, 
-          hour: timeSlot.hour,
-          minutes: timeSlot.minutes 
-        }));
-      } else {
-        // Don't block if there's an appointment
+        dispatch(
+          unblockHour({
+            date: formattedDate,
+            hour: timeSlot.hour,
+            minutes: timeSlot.minutes
+          })
+        );
+      } else if (!blockedTimes.days.includes(formattedDate)) {
         const hasAppointment = getAppointmentsForTimeSlot(date, timeSlot).length > 0;
         if (!hasAppointment) {
-          // Block: insert into creneaux_bloques
           const { error: insertError } = await supabase
             .from('creneaux_bloques')
-            .insert([{
-              date: formattedDate,
-              heure: timeSlot.hour,
-              minutes: timeSlot.minutes,
-              type_blocage: 'heure',
-            }]);
+            .insert([
+              {
+                date: formattedDate,
+                heure: timeSlot.hour,
+                minutes: timeSlot.minutes,
+                type_blocage: 'heure'
+              }
+            ]);
 
           if (insertError) throw insertError;
 
-          dispatch(blockHour({ 
-            date: formattedDate, 
-            hour: timeSlot.hour,
-            minutes: timeSlot.minutes
-          }));
+          dispatch(
+            blockHour({
+              date: formattedDate,
+              hour: timeSlot.hour,
+              minutes: timeSlot.minutes
+            })
+          );
         }
       }
-    } catch (error) {
-      console.error('Error handling time slot block:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error handling time slot block:', err);
+      setError(err.message);
     }
   };
 
@@ -166,11 +194,10 @@ export default function Agenda() {
     const handleResize = () => {
       setIsMobile(window.innerWidth < 768);
       setIsStacked(window.innerWidth < 640);
-      setIsLargeScreen(window.innerWidth >= 800);
     };
 
     window.addEventListener('resize', handleResize);
-    handleResize(); // Initial check
+    handleResize();
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
@@ -179,111 +206,69 @@ export default function Agenda() {
   const monthEnd = endOfMonth(currentDate);
   const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  // Get appointments for the selected date
-  const getAppointmentsForDate = (date) => {
-    return appointments.filter(appointment => 
-      isSameDay(parseISO(appointment.date), date) && 
-      appointment.status !== 'declined'
-    );
-  };
-
-  // Get appointments for a specific hour on the selected date
-  const getAppointmentsForHour = (date, hour) => {
-    return appointments.filter(appointment => {
-      const appointmentDate = parseISO(appointment.date);
-      return isSameDay(appointmentDate, date) && 
-             isSameHour(appointmentDate, setHours(date, hour)) && 
-             appointment.status !== 'declined';
-    });
-  };
-
-  // Navigate to previous month/day
+  // Navigate to previous month
   const goToPrevious = () => {
-    if (selectedDate) {
-      setSelectedDate(prev => {
-        const newDate = new Date(prev);
-        newDate.setDate(newDate.getDate() - 1);
-        return newDate;
-      });
-    } else {
-      setCurrentDate(subMonths(currentDate, 1));
+    setCurrentDate(prev => subMonths(prev, 1));
+  };
+
+  // Navigate to next month (limit to 3 months in the future)
+  const goToNext = () => {
+    const nextMonth = addMonths(currentDate, 1);
+    if (startOfMonth(nextMonth) <= maxAllowedDate) {
+      setCurrentDate(nextMonth);
     }
   };
 
-  // Navigate to next month/day
-  const goToNext = () => {
-    // Limit to 3 months in the future
-    const maxDate = new Date();
-    maxDate.setMonth(maxDate.getMonth() + 3);
-    
-    if (selectedDate) {
-      const nextDay = new Date(selectedDate);
-      nextDay.setDate(selectedDate.getDate() + 1);
-      if (nextDay <= maxDate) {
-        setSelectedDate(nextDay);
-      }
-    } else {
-      const nextMonth = addMonths(currentDate, 1);
-      if (nextMonth <= maxDate) {
-        setCurrentDate(nextMonth);
-      }
-    }
+  // Check if a day is blocked
+  const isDayBlocked = (date) => {
+    return blockedTimes.days.includes(format(date, 'yyyy-MM-dd'));
   };
 
   // Handle date selection
   const handleDateClick = (date) => {
-    // Only allow selecting dates from today to 3 months in the future
-    const today = new Date();
-    const maxDate = new Date();
-    maxDate.setMonth(maxDate.getMonth() + 3);
-    
-    if (date >= today && date <= maxDate) {
-      setSelectedDate(date);
-      
-      // If user is a doctor, show the block modal
-      if (user.role.toLowerCase() === 'doctor') {
+    const clickedDay = startOfDay(date);
+
+    if (isDoctor) {
+      if (clickedDay >= todayStart && clickedDay <= maxAllowedDate) {
+        setSelectedDate(date);
         setShowBlockModal(true);
       }
+      return;
     }
-  };
 
-  // Handle hour selection
-  const handleHourClick = (hour) => {
-    if (!selectedDate) return;
-    
-    const isBlocked = isHourBlocked(selectedDate, hour);
-    const hasAppointment = getAppointmentsForHour(selectedDate, hour).length > 0;
-    const isDayBlocked = blockedTimes.days.includes(format(selectedDate, 'yyyy-MM-dd'));
-    
-    // Only allow selecting available hours and when the day is not blocked
-    if (!isBlocked && !hasAppointment && !isDayBlocked) {
-      setSelectedHour(hour);
-      
-      // If user is a patient, show the appointment form
-      if (user.role.toLowerCase() === 'patient') {
-        setShowAppointmentForm(true);
+    if (isPatient) {
+      if (
+        clickedDay >= minPatientDate &&
+        clickedDay <= maxAllowedDate &&
+        !isDayBlocked(date)
+      ) {
+        setSelectedDate(date);
       }
     }
   };
 
-  // Fetch appointments and user data
-  const fetchData = async () => {
+  // Fetch appointments, occupied slots, and blocked times
+  const fetchData = useCallback(async (showSpinner = false) => {
     try {
-      setLoading(true);
+      if (showSpinner) setLoading(true);
       setError(null);
 
-      // Get current user from Supabase auth
-      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+      const {
+        data: { user: authUser },
+        error: authError
+      } = await supabase.auth.getUser();
       if (authError) throw authError;
+      if (!authUser) return;
 
-      // Fetch user profile
       const { data: userProfile, error: userProfileError } = await supabase
         .from('profiles')
-        .select('*')
+        .select('role, full_name, avatar_url, avatar')
         .eq('id', authUser.id)
         .maybeSingle();
 
       if (userProfileError) throw userProfileError;
+
+      const effectiveRole = (userProfile?.role || normalizedRole || 'patient').toLowerCase();
 
       // Fetch blocked times from creneaux_bloques
       const { data: blockedTimesData, error: blockedTimesError } = await supabase
@@ -292,20 +277,18 @@ export default function Agenda() {
 
       if (blockedTimesError) throw blockedTimesError;
 
-      // Transform blocked times data
-      const blockedDays = blockedTimesData
+      const blockedDays = (blockedTimesData || [])
         .filter(block => block.type_blocage === 'jour')
-        .map(block => format(new Date(block.date), 'yyyy-MM-dd'));
+        .map(block => normalizeDateKey(block.date));
 
-      const blockedHours = blockedTimesData
+      const blockedHours = (blockedTimesData || [])
         .filter(block => block.type_blocage === 'heure')
         .map(block => ({
-          date: format(new Date(block.date), 'yyyy-MM-dd'),
+          date: normalizeDateKey(block.date),
           hour: block.heure,
           minutes: block.minutes
         }));
 
-      // Update Redux store with blocked times
       dispatch(setBlockedTimes({ days: blockedDays, hours: blockedHours }));
 
       // Fetch appointments based on user role
@@ -315,23 +298,23 @@ export default function Agenda() {
           *,
           patient:profiles!rendez_vous_patient_id_fkey(
             full_name,
-            avatar_url
+            avatar_url,
+            avatar
           )
         `);
 
-      if (user.role.toLowerCase() === 'patient') {
+      if (effectiveRole === 'patient') {
         appointmentsQuery = appointmentsQuery.eq('patient_id', authUser.id);
       }
 
       const { data: appointmentsData, error: appointmentsError } = await appointmentsQuery;
       if (appointmentsError) throw appointmentsError;
 
-      // Transform appointments data
-      const transformedAppointments = appointmentsData.map(appointment => ({
+      const transformedAppointments = (appointmentsData || []).map(appointment => ({
         id: appointment.id,
         patientId: appointment.patient_id,
         patientName: appointment.patient_full_name || appointment.patient?.full_name || 'Unknown',
-        profilePicture: appointment.patient?.avatar_url,
+        profilePicture: appointment.patient?.avatar || appointment.patient?.avatar_url || null,
         date: appointment.date_heure,
         type: appointment.type_rendez_vous,
         status: appointment.statut,
@@ -341,137 +324,163 @@ export default function Agenda() {
 
       setAppointments(transformedAppointments);
 
-      // Check for active appointment
-      const now = new Date();
-      const activeAppointment = transformedAppointments.find(app => {
-        const appointmentDate = new Date(app.date);
-        // For accepted appointments, only show if the date hasn't passed
-        if (app.status === 'accepte') {
-          return appointmentDate > now;
+      // For patients, fetch all occupied slot timestamps via secure RPC so double-booking is prevented
+      if (effectiveRole === 'patient') {
+        const { data: bookedData, error: bookedError } = await supabase.rpc('get_booked_slots');
+        if (!bookedError && Array.isArray(bookedData)) {
+          setOccupiedSlots(
+            bookedData.map(slot => ({
+              date: slot.date_heure,
+              status: slot.statut
+            }))
+          );
+        } else {
+          setOccupiedSlots(transformedAppointments);
         }
-        // For pending or refused appointments, show them regardless of date
-        return app.status === 'en_attente' || app.status === 'refuse';
-      });
 
-      if (activeAppointment) {
-        setActiveAppointment(activeAppointment);
-        setHasActiveAppointment(true);
-        localStorage.setItem('activeAppointment', JSON.stringify(activeAppointment));
+        // Check for active appointment for the logged-in patient
+        const now = new Date();
+        const foundActive = transformedAppointments.find(app => {
+          const appointmentDate = parseISO(app.date);
+          if (app.status === 'accepte') {
+            return appointmentDate > now;
+          }
+          return app.status === 'en_attente' || app.status === 'refuse';
+        });
+
+        if (foundActive) {
+          setActiveAppointment(foundActive);
+          setHasActiveAppointment(true);
+          localStorage.setItem('activeAppointment', JSON.stringify(foundActive));
+        } else {
+          setActiveAppointment(null);
+          setHasActiveAppointment(false);
+          localStorage.removeItem('activeAppointment');
+        }
       } else {
-        // If no active appointment found, clear the state
+        setOccupiedSlots(transformedAppointments);
         setActiveAppointment(null);
         setHasActiveAppointment(false);
-        localStorage.removeItem('activeAppointment');
       }
-
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError(err.message);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
-  };
+  }, [dispatch, normalizedRole]);
 
-  // Add useEffect to fetch data periodically
+  // Fetch data on mount / role change and poll every 30 seconds
   useEffect(() => {
-    fetchData();
-    // Set up polling every 30 seconds to check for status updates
-    const interval = setInterval(fetchData, 30000);
+    fetchData(true);
+    const interval = setInterval(() => fetchData(false), 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   // Handle form submission
   const onSubmit = async (data) => {
     try {
       setLoading(true);
-      
-      // Get the current user from Supabase auth
-      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
-      
+      setError(null);
+
+      const {
+        data: { user: authUser },
+        error: authError
+      } = await supabase.auth.getUser();
+
       if (authError) throw authError;
       if (!authUser) throw new Error('No authenticated user found');
 
-      // Get the user's profile to ensure we have their name
       const { data: userProfile, error: userProfileError } = await supabase
         .from('profiles')
-        .select('full_name, avatar_url')
+        .select('full_name, avatar_url, avatar')
         .eq('id', authUser.id)
-        .single();
+        .maybeSingle();
 
       if (userProfileError) {
         console.error('Error fetching user profile:', userProfileError);
         throw userProfileError;
       }
 
-      if (!userProfile?.full_name) {
-        throw new Error('User profile name not found');
-      }
+      const patientFullName =
+        userProfile?.full_name ||
+        user.name ||
+        authUser.user_metadata?.full_name ||
+        authUser.email ||
+        'Patient';
 
-      // Create appointment record with time adjusted by -1 hour
+      // Use exact selected hour and minutes (no -1 hour offset!)
       const appointmentDate = new Date(selectedDate);
-      appointmentDate.setHours(selectedHour - 1, selectedMinutes || 0, 0, 0);
+      appointmentDate.setHours(selectedHour, selectedMinutes || 0, 0, 0);
 
       const { data: appointment, error: appointmentError } = await supabase
         .from('rendez_vous')
-        .insert([{
-          id: uuidv4(),
-          patient_id: authUser.id,
-          patient_full_name: userProfile.full_name,
-          date_heure: format(appointmentDate, "yyyy-MM-dd'T'HH:mm:ss"),
-          type_rendez_vous: data.appointmentType,
-          statut: 'en_attente',
-          note: data.note,
-          telephone: data.phone
-        }])
+        .insert([
+          {
+            id: uuidv4(),
+            patient_id: authUser.id,
+            patient_full_name: patientFullName,
+            date_heure: format(appointmentDate, "yyyy-MM-dd'T'HH:mm:ss"),
+            type_rendez_vous: data.appointmentType,
+            statut: 'en_attente',
+            note: data.note || '',
+            telephone: data.phone
+          }
+        ])
         .select()
         .single();
 
       if (appointmentError) {
         console.error('Error creating appointment:', appointmentError);
+        if (appointmentError.code === '23505') {
+          setError(t('agenda.slotAlreadyBooked'));
+          await fetchData(false);
+          setShowAppointmentForm(false);
+          setSelectedHour(null);
+          setSelectedMinutes(null);
+          return;
+        }
         throw appointmentError;
       }
 
-      // Update local state with the user's actual name
       const newAppointment = {
         id: appointment.id,
         patientId: authUser.id,
-        patientName: userProfile.full_name,
-        profilePicture: userProfile?.avatar_url,
+        patientName: patientFullName,
+        profilePicture: userProfile?.avatar || userProfile?.avatar_url || null,
         date: appointment.date_heure,
         type: data.appointmentType,
         status: 'en_attente',
         note: data.note,
         telephone: data.phone
       };
-      
-      // Update appointments list and set active appointment
+
       setAppointments(prev => [...prev, newAppointment]);
+      setOccupiedSlots(prev => [...prev, { date: appointment.date_heure, status: 'en_attente' }]);
       setActiveAppointment(newAppointment);
       setHasActiveAppointment(true);
-      
-      // Store in localStorage for persistence
       localStorage.setItem('activeAppointment', JSON.stringify(newAppointment));
 
-      // Close modal and reset form
       setShowAppointmentForm(false);
       setSelectedHour(null);
       setSelectedMinutes(null);
       setSelectedDate(null);
       reset();
-    } catch (error) {
-      console.error('Error saving appointment:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error saving appointment:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle appointment modification
+  // Handle appointment modification (for pending or refused appointments)
   const handleChangeAppointment = async () => {
+    if (!activeAppointment || activeAppointment.status === 'accepte') return;
     try {
       setLoading(true);
-      
-      // Delete the refused appointment from the database
+      setError(null);
+
       const { error: deleteError } = await supabase
         .from('rendez_vous')
         .delete()
@@ -482,24 +491,17 @@ export default function Agenda() {
         throw deleteError;
       }
 
-      // Update local state
       setAppointments(prev => prev.filter(app => app.id !== activeAppointment.id));
-    setHasActiveAppointment(false);
-    setActiveAppointment(null);
+      setOccupiedSlots(prev => prev.filter(slot => slot.date !== activeAppointment.date));
+      setHasActiveAppointment(false);
+      setActiveAppointment(null);
       localStorage.removeItem('activeAppointment');
-    } catch (error) {
-      console.error('Error changing appointment:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error changing appointment:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
-
-  // Handle appointment deletion
-  const handleDeleteAppointment = () => {
-    setHasActiveAppointment(false);
-    setActiveAppointment(null);
-    // Reset to calendar view
   };
 
   // Format time for display
@@ -522,13 +524,12 @@ export default function Agenda() {
   };
 
   // Get day name in current language with mobile optimization
-  const getDayName = (date, isMobile = false) => {
+  const getDayName = (date, mobile = false) => {
     const dayIndex = date.getDay();
     const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const dayName = t(`agenda.days.${days[dayIndex]}`);
-    
-    // Remove "ال" prefix for Arabic on mobile
-    if (isMobile && i18n.language === 'ar') {
+
+    if (mobile && i18n.language?.startsWith('ar')) {
       return dayName.replace('ال', '');
     }
     return dayName;
@@ -537,7 +538,20 @@ export default function Agenda() {
   // Get month name in current language
   const getMonthName = (date) => {
     const monthIndex = date.getMonth();
-    const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+    const months = [
+      'january',
+      'february',
+      'march',
+      'april',
+      'may',
+      'june',
+      'july',
+      'august',
+      'september',
+      'october',
+      'november',
+      'december'
+    ];
     return t(`agenda.months.${months[monthIndex]}`);
   };
 
@@ -546,26 +560,13 @@ export default function Agenda() {
     return t(`agenda.status.${status}`);
   };
 
-  // Check if a day is blocked
-  const isDayBlocked = (date) => {
-    return blockedTimes.days.includes(format(date, 'yyyy-MM-dd'));
-  };
-
-  // Check if an hour is blocked
-  const isHourBlocked = (date, hour) => {
-    const formattedDate = format(date, 'yyyy-MM-dd');
-    // Check if either the specific hour is blocked OR the entire day is blocked
-    return blockedTimes.hours.some(
-      block => block.date === formattedDate && block.hour === hour
-    ) || blockedTimes.days.includes(formattedDate);
-  };
- 
-  // Handle blocking/unblocking a day
+  // Handle blocking/unblocking a day (doctor only)
   const handleDayBlock = async (date) => {
+    if (!isDoctor) return;
     try {
+      setError(null);
       const formattedDate = format(date, 'yyyy-MM-dd');
       if (isDayBlocked(date)) {
-        // Unblock: delete from creneaux_bloques
         const { error: deleteError } = await supabase
           .from('creneaux_bloques')
           .delete()
@@ -576,51 +577,40 @@ export default function Agenda() {
 
         dispatch(unblockDay(formattedDate));
       } else {
-        // Block: insert into creneaux_bloques
         const { error: insertError } = await supabase
           .from('creneaux_bloques')
-          .insert([{
-            date: formattedDate,
-            heure: 0,
-            minutes: 0,
-            type_blocage: 'jour',
-          }]);
+          .insert([
+            {
+              date: formattedDate,
+              heure: 0,
+              minutes: 0,
+              type_blocage: 'jour'
+            }
+          ]);
 
         if (insertError) throw insertError;
 
         dispatch(blockDay(formattedDate));
       }
-    } catch (error) {
-      console.error('Error handling day block:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error handling day block:', err);
+      setError(err.message);
     }
   };
 
-  // Handle blocking/unblocking an hour
-  const handleHourBlock = (date, hour) => {
-    const formattedDate = format(date, 'yyyy-MM-dd');
-    if (isHourBlocked(date, hour)) {
-      dispatch(unblockHour({ date: formattedDate, hour }));
-    } else {
-      dispatch(blockHour({ date: formattedDate, hour }));
-    }
-  };
-
-  // Handle time slot click
+  // Handle time slot click (patient)
   const handleTimeSlotClick = (timeSlot) => {
     if (!selectedDate) return;
-    
+
     const isBlocked = isTimeSlotBlocked(selectedDate, timeSlot);
     const hasAppointment = getAppointmentsForTimeSlot(selectedDate, timeSlot).length > 0;
-    const isDayBlocked = blockedTimes.days.includes(format(selectedDate, 'yyyy-MM-dd'));
-    
-    // Only allow selecting available hours and when the day is not blocked
-    if (!isBlocked && !hasAppointment && !isDayBlocked) {
+    const dayBlocked = blockedTimes.days.includes(format(selectedDate, 'yyyy-MM-dd'));
+
+    if (!isBlocked && !hasAppointment && !dayBlocked) {
       setSelectedHour(timeSlot.hour);
       setSelectedMinutes(timeSlot.minutes);
-      
-      // If user is a patient, show the appointment form
-      if (user.role.toLowerCase() === 'patient') {
+
+      if (isPatient) {
         setShowAppointmentForm(true);
       }
     }
@@ -629,36 +619,47 @@ export default function Agenda() {
   // Render the month view
   const renderMonthView = () => {
     const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const firstDayOfMonth = startOfMonth(currentDate);
-    const firstDayIndex = firstDayOfMonth.getDay();
-    
+    const firstDayIndex = monthStart.getDay();
+
     return (
       <div className={`grid ${isStacked ? 'grid-cols-1' : 'grid-cols-7'} gap-1 overflow-x-auto`}>
         {/* Day headers */}
-        {!isStacked && days.map((day, index) => (
-          <div key={day} className="text-center font-medium text-gray-600 py-2 text-xs sm:text-sm">
-            {isMobile ? getDayName(new Date(firstDayOfMonth.getTime() + index * 24 * 60 * 60 * 1000), true) : t(`agenda.days.${day}`)}
-          </div>
-        ))}
-        
+        {!isStacked &&
+          days.map((day) => {
+            const label = t(`agenda.days.${day}`);
+            const displayLabel =
+              isMobile && i18n.language?.startsWith('ar') ? label.replace('ال', '') : label;
+            return (
+              <div key={day} className="text-center font-medium text-gray-600 py-2 text-xs sm:text-sm">
+                {displayLabel}
+              </div>
+            );
+          })}
+
+        {/* Empty cells to align day 1 with the correct weekday column */}
+        {!isStacked &&
+          Array.from({ length: firstDayIndex }).map((_, idx) => (
+            <div key={`empty-${idx}`} className="min-h-[80px] sm:min-h-[100px] p-1 sm:p-2" />
+          ))}
+
         {/* Calendar days */}
         {calendarDays.map((day, index) => {
+          const dayStart = startOfDay(day);
           const isToday = isSameDay(day, new Date());
-          const isPast = day < minAppointmentDate;
-          const isFuture = day > new Date(new Date().setMonth(new Date().getMonth() + 3));
+          const isPast = isDoctor ? dayStart < todayStart : dayStart < minPatientDate;
+          const isFuture = dayStart > maxAllowedDate;
           const isBlocked = isDayBlocked(day);
           const isAvailable = !isPast && !isFuture && !isBlocked;
-          
+
           return (
-            <div 
+            <div
               key={index}
               onClick={() => handleDateClick(day)}
               className={`
                 min-h-[80px] sm:min-h-[100px] p-1 sm:p-2 border rounded-lg relative
                 ${isToday ? 'bg-blue-50 border-blue-200' : 'border-gray-200'}
                 ${!isSameMonth(day, currentDate) ? 'opacity-50' : ''}
-                ${isPast ? 'opacity-50 cursor-not-allowed bg-red-50/30' : 'cursor-pointer'}
-                ${isFuture ? 'opacity-50 cursor-not-allowed bg-red-50/30' : ''}
+                ${isPast || isFuture ? 'opacity-50 cursor-not-allowed bg-red-50/30' : 'cursor-pointer'}
                 ${isBlocked ? 'bg-red-50' : ''}
                 ${isAvailable ? 'bg-green-50 hover:bg-green-100' : 'bg-red-50 hover:bg-red-100'}
                 ${isStacked ? 'mb-2' : ''}
@@ -666,17 +667,18 @@ export default function Agenda() {
             >
               <div className="flex justify-between items-start">
                 <div className="flex items-center">
-                <span className={`font-medium text-xs sm:text-sm ${isToday ? 'text-blue-600' : 'text-gray-700'}`}>
-                  {format(day, 'd')}
-                </span>
+                  <span className={`font-medium text-xs sm:text-sm ${isToday ? 'text-blue-600' : 'text-gray-700'}`}>
+                    {format(day, 'd')}
+                  </span>
                   {isStacked && (
                     <span className="ml-2 text-xs text-gray-500">
                       {getDayName(day, isMobile)}
                     </span>
                   )}
                 </div>
-                {user.role.toLowerCase() === 'doctor' && !isPast && !isFuture && (
+                {isDoctor && !isPast && !isFuture && (
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDayBlock(day);
@@ -698,8 +700,7 @@ export default function Agenda() {
   const renderTimeSlotsView = () => {
     if (!selectedDate) return null;
 
-    const isDayBlocked = blockedTimes.days.includes(format(selectedDate, 'yyyy-MM-dd'));
-    const timeSlots = generateTimeSlots();
+    const dayBlocked = blockedTimes.days.includes(format(selectedDate, 'yyyy-MM-dd'));
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
@@ -709,16 +710,17 @@ export default function Agenda() {
               {t('agenda.timeSlots.title')} - {format(selectedDate, 'd')} {getMonthName(selectedDate)}
             </h3>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               {timeSlots.map((timeSlot, index) => {
-                const isBlocked = isDayBlocked || isTimeSlotBlocked(selectedDate, timeSlot);
-                const hasActiveAppointment = getAppointmentsForTimeSlot(selectedDate, timeSlot).length > 0;
-                const isAvailable = !isBlocked && !hasActiveAppointment;
-                
+                const isBlocked = dayBlocked || isTimeSlotBlocked(selectedDate, timeSlot);
+                const slotAppointments = getAppointmentsForTimeSlot(selectedDate, timeSlot);
+                const hasSlotAppointment = slotAppointments.length > 0;
+                const isAvailable = !isBlocked && !hasSlotAppointment;
+
                 return (
-                  <div 
+                  <div
                     key={index}
                     onClick={() => handleTimeSlotClick(timeSlot)}
                     className={`flex items-center justify-between p-3 rounded-lg ${
@@ -735,12 +737,13 @@ export default function Agenda() {
                         </span>
                       ) : (
                         <span className="text-xs text-red-600">
-                          {hasActiveAppointment ? t('agenda.appointment') : t('agenda.blocked')}
+                          {hasSlotAppointment ? t('agenda.hasAppointment') : t('agenda.blocked')}
                         </span>
                       )}
                     </div>
-                    {user.role.toLowerCase() === 'doctor' && !hasActiveAppointment && (
+                    {isDoctor && !hasSlotAppointment && (
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleTimeSlotBlock(selectedDate, timeSlot);
@@ -752,14 +755,15 @@ export default function Agenda() {
                         {isBlocked ? <Lock size={18} /> : <LockOpen size={18} />}
                       </button>
                     )}
-            </div>
-          );
-        })}
+                  </div>
+                );
+              })}
             </div>
           </div>
-          
+
           <div className="p-4 sm:p-6 border-t flex justify-end">
-            <button 
+            <button
+              type="button"
               onClick={() => {
                 setSelectedDate(null);
               }}
@@ -785,18 +789,28 @@ export default function Agenda() {
               {t('agenda.timeSlots.title')} - {format(selectedDate, 'd')} {getMonthName(selectedDate)}
             </h3>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               {timeSlots.map((timeSlot, index) => {
                 const isBlocked = isTimeSlotBlocked(selectedDate, timeSlot);
-                const hasAppointment = getAppointmentsForTimeSlot(selectedDate, timeSlot).length > 0;
+                const slotAppointments = getAppointmentsForTimeSlot(selectedDate, timeSlot);
+                const hasAppointment = slotAppointments.length > 0;
                 const isAvailable = !isBlocked && !hasAppointment;
-                
+
                 return (
-                  <div key={index} className={`flex items-center justify-between p-3 rounded-lg ${
-                    isAvailable ? 'bg-green-50' : 'bg-red-50'
-                  }`}>
+                  <div
+                    key={index}
+                    onClick={() => {
+                      if (hasAppointment) {
+                        setSelectedAppointment(slotAppointments[0]);
+                        setShowAppointmentModal(true);
+                      }
+                    }}
+                    className={`flex items-center justify-between p-3 rounded-lg ${
+                      isAvailable ? 'bg-green-50' : 'bg-red-50'
+                    } ${hasAppointment ? 'cursor-pointer hover:bg-red-100' : ''}`}
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">
                         {formatTimeSlot(timeSlot)}
@@ -807,12 +821,13 @@ export default function Agenda() {
                         </span>
                       ) : (
                         <span className="text-xs text-red-600">
-                          {t('agenda.blocked')}
+                          {hasAppointment ? t('agenda.hasAppointment') : t('agenda.blocked')}
                         </span>
                       )}
                     </div>
-                    {user.role.toLowerCase() === 'doctor' && !hasAppointment && (
+                    {isDoctor && !hasAppointment && (
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleTimeSlotBlock(selectedDate, timeSlot);
@@ -829,9 +844,10 @@ export default function Agenda() {
               })}
             </div>
           </div>
-          
+
           <div className="p-4 sm:p-6 border-t flex justify-end">
-            <button 
+            <button
+              type="button"
               onClick={() => {
                 setShowBlockModal(false);
                 setSelectedDate(null);
@@ -848,15 +864,19 @@ export default function Agenda() {
 
   // Appointment Form Modal for patients
   const renderAppointmentForm = () => {
-    if (!selectedDate || !selectedHour) return null;
+    if (!selectedDate || selectedHour === null) return null;
+
+    const formattedSelectedTime = `${String(selectedHour).padStart(2, '0')}:${String(
+      selectedMinutes || 0
+    ).padStart(2, '0')}`;
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-4 sm:p-6">
           <h3 className="text-lg sm:text-xl font-bold mb-4">
-            {t('agenda.newAppointment')} - {format(selectedDate, 'd')} {getMonthName(selectedDate)} {selectedHour}:00
+            {t('agenda.newAppointment')} - {format(selectedDate, 'd')} {getMonthName(selectedDate)} {formattedSelectedTime}
           </h3>
-          
+
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -880,7 +900,7 @@ export default function Agenda() {
                 <p className="mt-1 text-sm text-red-600">{errors.phone.message}</p>
               )}
             </div>
-            
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 {t('agenda.form.appointmentType')}
@@ -903,7 +923,7 @@ export default function Agenda() {
                 <p className="mt-1 text-sm text-red-600">{errors.appointmentType.message}</p>
               )}
             </div>
-            
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 {t('agenda.form.note')}
@@ -925,7 +945,7 @@ export default function Agenda() {
                 <p className="mt-1 text-sm text-red-600">{errors.note.message}</p>
               )}
             </div>
-            
+
             <div className="flex justify-end space-x-3 pt-2">
               <button
                 type="button"
@@ -933,6 +953,7 @@ export default function Agenda() {
                   reset();
                   setShowAppointmentForm(false);
                   setSelectedHour(null);
+                  setSelectedMinutes(null);
                 }}
                 className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                 disabled={loading}
@@ -957,34 +978,41 @@ export default function Agenda() {
                 ) : (
                   t('agenda.form.submit')
                 )}
-                      </button>
-                  </div>
+              </button>
+            </div>
           </form>
         </div>
       </div>
     );
   };
 
-  // Render appointment management view
+  // Render appointment management view (patient with active appointment)
   const renderAppointmentManagement = () => {
-    if (!hasActiveAppointment || !activeAppointment || user.role.toLowerCase() !== 'patient') return null;
+    if (!hasActiveAppointment || !activeAppointment || !isPatient) return null;
+    const parsedDate = parseISO(activeAppointment.date);
 
     return (
       <div className="h-full flex flex-col items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
           <h2 className="text-2xl font-bold text-center mb-6">{t('agenda.manageAppointment')}</h2>
-          
+
+          {error && (
+            <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
           <div className="space-y-4 mb-6">
             <div className="bg-blue-50 p-4 rounded-lg">
               <h3 className="font-semibold mb-2">{t('agenda.appointmentDetails')}</h3>
               <div className="space-y-2">
                 <p>
                   <span className="font-medium">{t('agenda.date')}:</span>{' '}
-                  {format(parseISO(activeAppointment.date), 'EEEE d MMMM yyyy', { locale: fr })}
+                  {`${getDayName(parsedDate)} ${format(parsedDate, 'd')} ${getMonthName(parsedDate)} ${format(parsedDate, 'yyyy')}`}
                 </p>
                 <p>
                   <span className="font-medium">{t('agenda.time')}:</span>{' '}
-                  {format(parseISO(activeAppointment.date), 'HH:mm')}
+                  {format(parsedDate, 'HH:mm')}
                 </p>
                 <p>
                   <span className="font-medium">{t('agenda.type')}:</span>{' '}
@@ -1002,12 +1030,14 @@ export default function Agenda() {
 
           <div className="flex flex-col space-y-3">
             {activeAppointment.status === 'en_attente' && (
-            <button
-              onClick={handleChangeAppointment}
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              {t('agenda.modifyAppointment')}
-            </button>
+              <button
+                type="button"
+                onClick={handleChangeAppointment}
+                disabled={loading}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {t('agenda.modifyAppointment')}
+              </button>
             )}
             {activeAppointment.status === 'accepte' && (
               <div className="text-center p-4 bg-green-50 rounded-lg">
@@ -1017,7 +1047,7 @@ export default function Agenda() {
                 <p className="text-sm text-green-600 mt-2">
                   {t('agenda.appointmentAcceptedMessage')}
                 </p>
-          </div>
+              </div>
             )}
             {activeAppointment.status === 'refuse' && (
               <div className="text-center p-4 bg-red-50 rounded-lg">
@@ -1028,8 +1058,10 @@ export default function Agenda() {
                   {t('agenda.appointmentDeclinedMessage')}
                 </p>
                 <button
+                  type="button"
                   onClick={handleChangeAppointment}
-                  className="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  disabled={loading}
+                  className="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                 >
                   {t('agenda.requestNewAppointment')}
                 </button>
@@ -1043,7 +1075,7 @@ export default function Agenda() {
 
   return (
     <div className="h-full flex flex-col">
-      {hasActiveAppointment && user.role.toLowerCase() === 'patient' ? (
+      {hasActiveAppointment && isPatient ? (
         renderAppointmentManagement()
       ) : (
         <>
@@ -1051,7 +1083,8 @@ export default function Agenda() {
           <div className="flex flex-col sm:flex-row items-center justify-between p-2 sm:p-4 bg-white border-b">
             <h1 className="text-xl sm:text-2xl font-bold text-gray-800">{t('agenda.title')}</h1>
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <button 
+              <button
+                type="button"
                 onClick={goToPrevious}
                 className="p-1 sm:p-2 rounded-full hover:bg-gray-100"
               >
@@ -1060,7 +1093,8 @@ export default function Agenda() {
               <h2 className="text-lg sm:text-xl font-semibold text-center">
                 {getMonthName(currentDate)}
               </h2>
-              <button 
+              <button
+                type="button"
                 onClick={goToNext}
                 className="p-1 sm:p-2 rounded-full hover:bg-gray-100"
               >
@@ -1068,6 +1102,19 @@ export default function Agenda() {
               </button>
             </div>
           </div>
+
+          {error && (
+            <div className="mx-4 mt-3 rounded-md bg-red-50 border border-red-200 p-3 flex items-center justify-between text-sm text-red-700">
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="ml-4 text-xs font-medium text-red-800 underline"
+              >
+                {t('common.close')}
+              </button>
+            </div>
+          )}
 
           {/* Calendar content */}
           <div className="flex-1 p-2 sm:p-4 overflow-auto">
@@ -1078,7 +1125,7 @@ export default function Agenda() {
           {showBlockModal && renderBlockModal()}
 
           {/* Time slots view for patients */}
-          {selectedDate && user.role.toLowerCase() === 'patient' && !showAppointmentForm && renderTimeSlotsView()}
+          {selectedDate && isPatient && !showAppointmentForm && renderTimeSlotsView()}
 
           {/* Appointment Form Modal for patients */}
           {showAppointmentForm && renderAppointmentForm()}
@@ -1088,40 +1135,41 @@ export default function Agenda() {
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-4 sm:p-6">
                 <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">{t('agenda.appointmentDetails')}</h3>
-                
+
                 <div className="space-y-3 sm:space-y-4">
                   <div>
                     <p className="text-xs sm:text-sm text-gray-500">{t('agenda.patient')}</p>
                     <p className="font-medium text-sm sm:text-base">{selectedAppointment.patientName}</p>
                   </div>
-                  
+
                   <div>
                     <p className="text-xs sm:text-sm text-gray-500">{t('agenda.date')}</p>
                     <p className="font-medium text-sm sm:text-base">
                       {`${getDayName(parseISO(selectedAppointment.date))} ${format(parseISO(selectedAppointment.date), 'd')} ${getMonthName(parseISO(selectedAppointment.date))} ${format(parseISO(selectedAppointment.date), 'yyyy')}`}
                     </p>
                   </div>
-                  
+
                   <div>
                     <p className="text-xs sm:text-sm text-gray-500">{t('agenda.time')}</p>
                     <p className="font-medium text-sm sm:text-base">{formatAppointmentTime(selectedAppointment.date)}</p>
                   </div>
-                  
+
                   <div>
                     <p className="text-xs sm:text-sm text-gray-500">{t('agenda.type')}</p>
                     <p className="font-medium text-sm sm:text-base capitalize">{t(`agenda.appointmentTypes.${selectedAppointment.type}`)}</p>
                   </div>
-                  
+
                   <div>
-                    <p className="text-xs sm:text-sm text-gray-500">{t('agenda.status')}</p>
+                    <p className="text-xs sm:text-sm text-gray-500">{t('agenda.statusType')}</p>
                     <p className={`font-medium text-sm sm:text-base capitalize ${getStatusColor(selectedAppointment.status)} inline-block px-2 py-1 rounded`}>
                       {getStatusText(selectedAppointment.status)}
                     </p>
                   </div>
                 </div>
-                
+
                 <div className="mt-4 sm:mt-6 flex justify-end">
-                  <button 
+                  <button
+                    type="button"
                     onClick={() => setShowAppointmentModal(false)}
                     className="px-3 sm:px-4 py-1 sm:py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs sm:text-sm"
                   >
@@ -1135,4 +1183,4 @@ export default function Agenda() {
       )}
     </div>
   );
-} 
+}

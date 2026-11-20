@@ -3,7 +3,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { setSidebarOpen } from '../store/slices/sidebarSlice';
 
-export default function Header({ onShowNotifications }) {
+export default function Header() {
   const { t } = useTranslation();
   const user = useSelector((state) => state.user);
   const dispatch = useDispatch();
@@ -41,11 +41,11 @@ export default function Header({ onShowNotifications }) {
             </div>
             <div className="text-right">
               {isDoctor ? (
-                <p className="text-sm font-medium text-gray-800">Médecin</p>
+                <p className="text-sm font-medium text-gray-800">{t('roles.doctor')}</p>
               ) : (
                 <>
                   <p className="text-sm font-medium text-gray-800">{t('common.greeting')}, {user.name}</p>
-                  <p className="text-xs text-gray-600">{t(`roles.${user.role?.toLowerCase()}`)}</p>
+                  <p className="text-xs text-gray-600">{t(`roles.${(user.role || 'patient').toLowerCase()}`)}</p>
                 </>
               )}
             </div>

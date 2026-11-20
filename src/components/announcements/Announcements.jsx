@@ -1,34 +1,24 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSelector, useDispatch } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { supabase } from '../../lib/supabase';
-import { Megaphone, Plus, Trash, X, Image } from 'phosphor-react';
-import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Plus, X, Image } from 'phosphor-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useForm } from 'react-hook-form';
-import { updateUser } from '../../store/slices/userSlice';
+import imageCompression from 'browser-image-compression';
 
 export default function Announcements() {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const dispatch = useDispatch();
-  const userRole = useSelector((state) => state.user.role) || localStorage.getItem('userRole');
+  const { t, i18n } = useTranslation();
+  const userRole = (useSelector((state) => state.user.role) || '').toLowerCase();
+  const isDoctor = userRole === 'doctor';
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
-  
-  console.log('Current userRole:', userRole);
-
-  useEffect(() => {
-    // Sync user role from localStorage to Redux if needed
-    const storedRole = localStorage.getItem('userRole');
-    if (storedRole && storedRole !== userRole) {
-      dispatch(updateUser({ role: storedRole }));
-    }
-  }, [dispatch, userRole]);
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm({
     defaultValues: {
@@ -45,78 +35,103 @@ export default function Announcements() {
   const fetchAnnouncements = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      setError(null);
+      const { data, error: fetchError } = await supabase
         .from('annonces')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (fetchError) throw fetchError;
       setAnnouncements(data || []);
-    } catch (error) {
-      console.error('Error fetching announcements:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error fetching announcements:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   const handleCreateAnnouncement = async (data) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       const now = new Date();
       const announcementData = {
-        ...data,
-        photo: imagePreview,
+        titre: data.titre.trim(),
+        contenu: data.contenu.trim(),
+        photo: imagePreview || null,
         created_at: now.toISOString()
       };
 
-      const { data: newData, error } = await supabase
+      const { data: newData, error: insertError } = await supabase
         .from('annonces')
         .insert([announcementData])
         .select();
 
-      if (error) throw error;
+      if (insertError) throw insertError;
 
-      setAnnouncements([...newData, ...announcements]);
+      setAnnouncements((prev) => [...(newData || []), ...prev]);
       setIsCreating(false);
       reset();
       setImagePreview(null);
-    } catch (error) {
-      console.error('Error creating announcement:', error);
-      setError(error.message);
+    } catch (err) {
+      console.error('Error creating announcement:', err);
+      setError(err.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleDeleteAnnouncement = async (idAnnonce) => {
+    if (deletingId) return;
+    setDeletingId(idAnnonce);
     try {
-      const { error } = await supabase
+      const { error: deleteError } = await supabase
         .from('annonces')
         .delete()
         .eq('idAnnonce', idAnnonce);
 
-      if (error) throw error;
+      if (deleteError) throw deleteError;
 
-      setAnnouncements(announcements.filter(ann => ann.idAnnonce !== idAnnonce));
-    } catch (error) {
-      console.error('Error deleting announcement:', error);
-      setError(error.message);
+      setAnnouncements((prev) => prev.filter(ann => ann.idAnnonce !== idAnnonce));
+    } catch (err) {
+      console.error('Error deleting announcement:', err);
+      setError(err.message);
+    } finally {
+      setDeletingId(null);
     }
   };
 
   const handleImageChange = async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
+    if (file.size > 5 * 1024 * 1024) {
+      setError(t('validation.fileTooLarge'));
+      return;
+    }
+
     try {
+      const compressedFile = await imageCompression(file, {
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1200,
+        useWebWorker: true,
+        fileType: 'image/jpeg',
+      });
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result);
       };
-      reader.readAsDataURL(file);
-    } catch (error) {
-      console.error('Error processing image:', error);
-      setError(error.message);
+      reader.readAsDataURL(compressedFile);
+    } catch (err) {
+      console.error('Error processing image:', err);
+      setError(err.message || t('validation.compressionError'));
     }
   };
+
+  const locale = i18n.language?.startsWith('ar') ? 'ar-DZ' : 'fr-FR';
 
   if (loading) {
     return (
@@ -164,7 +179,6 @@ export default function Announcements() {
       {/* Header with Add Button */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4">
         <div className="flex items-center gap-3">
-          
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-1">
               {t('announcements.title')}
@@ -174,7 +188,7 @@ export default function Announcements() {
             </p>
           </div>
         </div>
-        {userRole === 'doctor' && (
+        {isDoctor && (
           <button
             onClick={() => setIsCreating(true)}
             className="flex items-center gap-2 px-4 py-2.5 border bg-stone-200 bg-opacity-50 border-stone-300 text-blue-500 font-bold rounded-xl text-sm font-medium w-full sm:w-auto justify-center sm:justify-start"
@@ -190,7 +204,7 @@ export default function Announcements() {
         {announcements.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <p className="text-gray-500 text-lg">{t('announcements.noAnnouncements')}</p>
-            {userRole === 'doctor' && (
+            {isDoctor && (
               <p className="text-gray-400 text-sm mt-2">{t('announcements.addAnnouncementHint')}</p>
             )}
           </div>
@@ -199,7 +213,7 @@ export default function Announcements() {
             <div key={announcement.idAnnonce} className="bg-white rounded-xl shadow-sm overflow-hidden">
               {announcement.photo && (
                 <div className="p-4">
-                  <div 
+                  <div
                     className="w-96 h-64 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
                     onClick={() => setSelectedImage(announcement.photo)}
                   >
@@ -218,14 +232,15 @@ export default function Announcements() {
                       <h3 className="text-base font-semibold text-gray-800 mb-1.5">
                         {announcement.titre}
                       </h3>
-                      <p className="text-gray-600 text-sm leading-relaxed">
+                      <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
                         {announcement.contenu}
                       </p>
                     </div>
-                    {userRole === 'doctor' && (
+                    {isDoctor && (
                       <button
                         onClick={() => handleDeleteAnnouncement(announcement.idAnnonce)}
-                        className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-sm font-medium shrink-0"
+                        disabled={deletingId === announcement.idAnnonce}
+                        className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-sm font-medium shrink-0 disabled:opacity-50"
                       >
                         {t('announcements.card.delete')}
                       </button>
@@ -233,7 +248,7 @@ export default function Announcements() {
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-500">
                     <span>
-                      {new Date(announcement.created_at).toLocaleString(undefined, {
+                      {new Date(announcement.created_at).toLocaleString(locale, {
                         year: 'numeric',
                         month: 'long',
                         day: 'numeric',
@@ -302,6 +317,7 @@ export default function Announcements() {
                   {t('announcements.addModal.title')}
                 </h2>
                 <button
+                  type="button"
                   onClick={() => {
                     setIsCreating(false);
                     reset();
@@ -319,7 +335,7 @@ export default function Announcements() {
                       {t('announcements.addModal.titleLabel')}
                     </label>
                     <input
-                      {...register('titre', { 
+                      {...register('titre', {
                         required: t('announcements.addModal.titleRequired'),
                         maxLength: {
                           value: 150,
@@ -397,15 +413,17 @@ export default function Announcements() {
                       reset();
                       setImagePreview(null);
                     }}
-                    className="px-3 sm:px-4 py-2 text-gray-700 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition-colors"
+                    disabled={isSubmitting}
+                    className="px-3 sm:px-4 py-2 text-gray-700 bg-gray-100 rounded-lg text-sm hover:bg-gray-200 transition-colors disabled:opacity-50"
                   >
                     {t('announcements.addModal.cancel')}
                   </button>
                   <button
                     type="submit"
-                    className="px-3 sm:px-4 py-2 bg-sky-600 text-white rounded-lg text-sm hover:bg-sky-700 transition-colors"
+                    disabled={isSubmitting}
+                    className="px-3 sm:px-4 py-2 bg-sky-600 text-white rounded-lg text-sm hover:bg-sky-700 transition-colors disabled:opacity-50"
                   >
-                    {t('announcements.addModal.publish')}
+                    {isSubmitting ? t('common.saving') : t('announcements.addModal.publish')}
                   </button>
                 </div>
               </form>
@@ -415,4 +433,4 @@ export default function Announcements() {
       </AnimatePresence>
     </div>
   );
-} 
+}

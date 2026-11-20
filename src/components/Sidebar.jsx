@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { setSidebarOpen } from "../store/slices/sidebarSlice";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence } from "motion/react";
 import {
   House,
   Megaphone,
@@ -74,9 +74,12 @@ export default function Sidebar() {
     },
   ];
 
+  const normalizedRole = (user.role || '').toLowerCase();
+  const isDoctor = normalizedRole === 'doctor';
+
   // Filter items based on user role
-  const filteredNavItems = navItems.filter(item => 
-    item.roles.includes(user.role.toLowerCase())
+  const filteredNavItems = navItems.filter(item =>
+    item.roles.includes(normalizedRole)
   );
 
   // For mobile, render a full overlay
@@ -117,8 +120,14 @@ export default function Sidebar() {
                     )}
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-gray-800">{t('common.greeting')}, {user.name}</p>
-                    <p className="text-xs text-gray-600">{t(`roles.${user.role.toLowerCase()}`)}</p>
+                    {isDoctor ? (
+                      <p className="text-sm font-medium text-gray-800">{t('roles.doctor')}</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-gray-800">{t('common.greeting')}, {user.name}</p>
+                        <p className="text-xs text-gray-600">{t(`roles.${normalizedRole || 'patient'}`)}</p>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

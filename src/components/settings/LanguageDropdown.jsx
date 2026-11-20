@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
 import { updateLanguage } from '../../store/slices/userSlice';
@@ -13,12 +13,13 @@ export default function LanguageDropdown() {
     { code: 'ar', name: t('settings.language.arabic'), flag: 'AR' }
   ];
 
-  const initialLang = languages.some(lang => lang.code === i18n.language)
-    ? i18n.language
-    : languages[0].code;
-
-  const [currentLang, setCurrentLang] = useState(initialLang);
+  const resolvedLang = i18n.language?.startsWith('ar') ? 'ar' : 'fr';
+  const [currentLang, setCurrentLang] = useState(resolvedLang);
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    setCurrentLang(i18n.language?.startsWith('ar') ? 'ar' : 'fr');
+  }, [i18n.language]);
 
   const handleLanguageChange = (langCode) => {
     i18n.changeLanguage(langCode);
@@ -38,6 +39,7 @@ export default function LanguageDropdown() {
 
       <div className="relative">
         <button
+          type="button"
           onClick={() => setIsOpen(!isOpen)}
           className="w-full p-3 flex items-center justify-between bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
         >
@@ -65,6 +67,7 @@ export default function LanguageDropdown() {
             {languages.map((lang) => (
               <button
                 key={lang.code}
+                type="button"
                 onClick={() => handleLanguageChange(lang.code)}
                 className={`w-full p-3 flex items-center hover:bg-gray-50 ${
                   currentLang === lang.code ? 'bg-blue-50 text-blue-600' : 'text-gray-700'

@@ -19,6 +19,7 @@ export default {
     invalidEmail: "Email invalide",
     passwordComplexity: "Le mot de passe doit contenir au moins une majuscule, une minuscule, un chiffre et un caractère spécial",
     fileTooLarge: "Le fichier est trop volumineux (maximum 5MB)",
+    compressionError: "Erreur lors de la compression de l'image",
   },
   nav: {
     home: "Accueil",
@@ -43,6 +44,7 @@ export default {
       title: "Informations du profil",
       photo: "Photo de profil",
       change: "Changer",
+      compressing: "Compression...",
       name: "Nom",
       email: "Email",
       save: "Enregistrer",
@@ -141,6 +143,8 @@ export default {
       annule: 'Annulé'
     },
     hasAppointment: "Rendez-vous",
+    appointment: "Rendez-vous",
+    slotAlreadyBooked: "Ce créneau horaire vient d'être réservé. Veuillez en choisir un autre.",
     blocked: "Bloqué",
     available: "Disponible",
     form: {
@@ -209,6 +213,8 @@ export default {
     verificationError: "Erreur lors de la vérification du code",
     registrationError: "Erreur lors de l'inscription",
     loginError: "Identifiants invalides",
+    emailNotConfirmed: "Veuillez confirmer votre adresse email avant de vous connecter",
+    emailAlreadyExists: "Un compte existe déjà avec cette adresse email",
     requiredFields: "Tous les champs sont requis",
     noAccount: "Vous n'avez pas de compte ?",
   },

@@ -8,7 +8,7 @@ import DisconnectSection from './settings/DisconnectSection';
 export default function Parameters() {
   const { t } = useTranslation();
   const user = useSelector((state) => state.user);
-  const isDoctor = user.role.toLowerCase() === 'doctor';
+  const isDoctor = (user.role || '').toLowerCase() === 'doctor';
 
   return (
     <div className="p-6 w-full max-w-4xl mx-auto">

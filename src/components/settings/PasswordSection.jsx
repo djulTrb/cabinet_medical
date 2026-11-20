@@ -37,29 +37,28 @@ export default function PasswordSection() {
 
   const handlePasswordChange = (e) => {
     const { name, value } = e.target;
-    setPasswordData({
-      ...passwordData,
+    setPasswordData((prev) => ({
+      ...prev,
       [name]: value,
-    });
-    // Clear error when user starts typing
+    }));
     if (errors[name]) {
-      setErrors({
-        ...errors,
+      setErrors((prev) => ({
+        ...prev,
         [name]: '',
-      });
+      }));
     }
   };
 
   const togglePasswordVisibility = (field) => {
-    setShowPasswords({
-      ...showPasswords,
-      [field]: !showPasswords[field],
-    });
+    setShowPasswords((prev) => ({
+      ...prev,
+      [field]: !prev[field],
+    }));
   };
 
   const validateForm = () => {
     const newErrors = {};
-    
+
     if (!passwordData.currentPassword) {
       newErrors.currentPassword = t('validation.required');
     }
@@ -70,8 +69,12 @@ export default function PasswordSection() {
       const passwordValidation = validatePassword(passwordData.newPassword);
       if (!passwordValidation.isLongEnough) {
         newErrors.newPassword = t('validation.passwordLength');
-      } else if (!passwordValidation.hasUpperCase || !passwordValidation.hasLowerCase || 
-                 !passwordValidation.hasNumbers || !passwordValidation.hasSpecialChar) {
+      } else if (
+        !passwordValidation.hasUpperCase ||
+        !passwordValidation.hasLowerCase ||
+        !passwordValidation.hasNumbers ||
+        !passwordValidation.hasSpecialChar
+      ) {
         newErrors.newPassword = t('validation.passwordComplexity');
       }
     }
@@ -86,15 +89,28 @@ export default function PasswordSection() {
     return Object.keys(newErrors).length === 0;
   };
 
+  const handleCancel = () => {
+    setPasswordData({
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+    });
+    setErrors({});
+    setIsChangingPassword(false);
+  };
+
   const handlePasswordUpdate = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
 
     setIsSubmitting(true);
+    setErrors({});
     try {
-      // Get the current user's email
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError || !user) {
         throw new Error('No user found');
       }
 
@@ -111,7 +127,7 @@ export default function PasswordSection() {
         return;
       }
 
-      // If current password is correct, update to new password
+      // Update to new password
       const { error: updateError } = await supabase.auth.updateUser({
         password: passwordData.newPassword,
       });
@@ -120,18 +136,16 @@ export default function PasswordSection() {
         throw updateError;
       }
 
-      // Clear form and show success message
       setPasswordData({
         currentPassword: "",
         newPassword: "",
         confirmPassword: "",
       });
       setIsChangingPassword(false);
-      
     } catch (error) {
       console.error('Password update error:', error);
       setErrors({
-        submit: t('settings.password.updateError'),
+        submit: error.message || t('settings.password.updateError'),
       });
     } finally {
       setIsSubmitting(false);
@@ -144,7 +158,7 @@ export default function PasswordSection() {
         <Lock size={24} className="text-blue-600 mr-2 sm:mr-3" />
         <h2 className="text-base sm:text-lg font-semibold text-gray-800">{t('settings.password.title')}</h2>
       </div>
-      
+
       {isChangingPassword ? (
         <form onSubmit={handlePasswordUpdate} className="ml-7 sm:ml-9">
           <div className="mb-4">
@@ -171,7 +185,7 @@ export default function PasswordSection() {
               <p className="mt-1 text-xs text-red-500">{errors.currentPassword}</p>
             )}
           </div>
-          
+
           <div className="mb-4">
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
               {t('settings.password.new')}
@@ -195,9 +209,8 @@ export default function PasswordSection() {
             {errors.newPassword && (
               <p className="mt-1 text-xs text-red-500">{errors.newPassword}</p>
             )}
-            
           </div>
-          
+
           <div className="mb-4">
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
               {t('settings.password.confirm')}
@@ -222,11 +235,11 @@ export default function PasswordSection() {
               <p className="mt-1 text-xs text-red-500">{errors.confirmPassword}</p>
             )}
           </div>
-          
+
           {errors.submit && (
             <p className="mb-4 text-xs text-red-500">{errors.submit}</p>
           )}
-          
+
           <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
             <button
               type="submit"
@@ -237,7 +250,7 @@ export default function PasswordSection() {
             </button>
             <button
               type="button"
-              onClick={() => setIsChangingPassword(false)}
+              onClick={handleCancel}
               disabled={isSubmitting}
               className="w-full sm:w-auto bg-gray-200 text-gray-700 px-4 py-2 text-xs sm:text-sm rounded-lg hover:bg-gray-300"
             >
@@ -251,6 +264,7 @@ export default function PasswordSection() {
             {t('settings.password.description')}
           </p>
           <button
+            type="button"
             onClick={() => setIsChangingPassword(true)}
             className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg text-xs sm:text-sm font-medium hover:bg-blue-100 transition-colors w-full sm:w-auto"
           >
@@ -260,4 +274,4 @@ export default function PasswordSection() {
       )}
     </div>
   );
-} 
+}

@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
-import { Envelope, Lock, User } from 'phosphor-react';
+import { Envelope, Lock } from 'phosphor-react';
 import { supabase } from '../../lib/supabase';
+import { ensureUserProfile } from '../../lib/authHelpers';
 import { useDispatch } from 'react-redux';
-import { updateUser, updateProfile } from '../../store/slices/userSlice';
+import { updateUser } from '../../store/slices/userSlice';
 import LanguageSwitch from './LanguageSwitch';
 
 export default function Inscription() {
@@ -14,7 +15,6 @@ export default function Inscription() {
   const dispatch = useDispatch();
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [userInfo, setUserInfo] = useState(null);
 
   const {
     register,
@@ -25,81 +25,55 @@ export default function Inscription() {
   const onSubmit = async (data) => {
     setIsLoading(true);
     setError('');
-    
+
     try {
-      console.log('Attempting login...');
+      const normalizedEmail = data.email.trim().toLowerCase();
+
       // Sign in with Supabase Auth
       const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: data.email,
+        email: normalizedEmail,
         password: data.password,
       });
 
       if (signInError) {
         console.error('Sign in error:', signInError);
-        setError(signInError.message || t('auth.loginError'));
+        const msg = (signInError.message || '').toLowerCase();
+        if (msg.includes('email not confirmed')) {
+          setError(t('auth.emailNotConfirmed'));
+        } else if (msg.includes('invalid login credentials')) {
+          setError(t('auth.loginError'));
+        } else {
+          setError(signInError.message || t('auth.loginError'));
+        }
         return;
       }
 
       if (!authData?.user?.id) {
-        console.error('No user data returned from sign in');
         setError(t('auth.loginError'));
         return;
       }
 
-      console.log('Fetching user data...');
-      // Get user data from profiles table
-      const { data: userData, error: userError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authData.user.id)
-        .single();
+      // Fetch or bootstrap user profile from profiles table
+      const userData = await ensureUserProfile(authData.user);
 
-      if (userError) {
-        console.error('Error fetching user data:', userError);
-        setError(userError.message || t('auth.loginError'));
-        return;
-      }
-
-      if (userData) {
-        setUserInfo({
+      // Update Redux store atomically with full authenticated user info
+      dispatch(
+        updateUser({
           id: userData.id,
-          email: userData.email,
-          name: userData.full_name,
           role: userData.role,
-          avatar: userData.avatar
-        });
-      }
-
-      // Update Redux store with user info
-      dispatch(updateUser({ role: userData.role }));
-      dispatch(updateProfile({
-        name: userData.full_name,
-        email: userData.email,
-        avatar: userData.avatar
-      }));
-
-      // Set authentication in localStorage
-      localStorage.setItem('isAuthenticated', 'true');
-
-      // Log the state after update
-      console.log('Redux state after update:', {
-        role: userData.role,
-        name: userData.full_name,
-        email: userData.email,
-        avatar: userData.avatar
-      });
-
-      // Add a small delay to ensure state is updated
-      await new Promise(resolve => setTimeout(resolve, 100));
+          name: userData.full_name,
+          email: userData.email,
+          avatar: userData.avatar,
+          isAuthenticated: true,
+        })
+      );
 
       // Redirect based on role
-      console.log('Navigating based on role:', userData.role);
       if (userData.role === 'doctor') {
         navigate('/tableau-de-bord', { replace: true });
       } else {
         navigate('/agenda', { replace: true });
       }
-
     } catch (err) {
       console.error('Login error:', err);
       setError(err.message || t('auth.loginError'));
@@ -149,7 +123,8 @@ export default function Inscription() {
                 <input
                   id="email"
                   type="email"
-                  {...register('email', { 
+                  autoComplete="email"
+                  {...register('email', {
                     required: t('auth.emailRequired'),
                     pattern: {
                       value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
@@ -176,7 +151,8 @@ export default function Inscription() {
                 <input
                   id="password"
                   type="password"
-                  {...register('password', { 
+                  autoComplete="current-password"
+                  {...register('password', {
                     required: t('auth.passwordRequired'),
                     minLength: {
                       value: 6,
@@ -216,4 +192,4 @@ export default function Inscription() {
       </div>
     </div>
   );
-} 
+}

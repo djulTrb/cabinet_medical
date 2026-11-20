@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { updateProfile } from '../../store/slices/userSlice';
@@ -11,18 +11,29 @@ export default function ProfileSection() {
   const dispatch = useDispatch();
   const user = useSelector((state) => state.user);
   const [profileData, setProfileData] = useState({
-    name: user.name,
-    avatar: user.avatar,
+    name: user.name || '',
+    avatar: user.avatar || null,
   });
-  const [avatarPreview, setAvatarPreview] = useState(user.avatar);
+  const [avatarPreview, setAvatarPreview] = useState(user.avatar || null);
   const [isEditing, setIsEditing] = useState(false);
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
 
+  // Keep local state in sync with Redux user state when not editing
+  useEffect(() => {
+    if (!isEditing) {
+      setProfileData({
+        name: user.name || '',
+        avatar: user.avatar || null,
+      });
+      setAvatarPreview(user.avatar || null);
+    }
+  }, [user.name, user.avatar, isEditing]);
+
   const validateForm = () => {
     const newErrors = {};
-    if (!profileData.name.trim()) {
+    if (!(profileData.name || '').trim()) {
       newErrors.name = t('validation.required');
     }
     setErrors(newErrors);
@@ -31,30 +42,28 @@ export default function ProfileSection() {
 
   const handleProfileChange = (e) => {
     const { name, value } = e.target;
-    setProfileData({
-      ...profileData,
+    setProfileData((prev) => ({
+      ...prev,
       [name]: value,
-    });
-    // Clear error when user starts typing
+    }));
     if (errors[name]) {
-      setErrors({
-        ...errors,
+      setErrors((prev) => ({
+        ...prev,
         [name]: '',
-      });
+      }));
     }
   };
 
   const compressImage = async (file) => {
     const options = {
-      maxSizeMB: 1, // Max file size 1MB
-      maxWidthOrHeight: 500, // Max width/height 500px
-      useWebWorker: true, // Use web worker for better performance
-      fileType: 'image/jpeg', // Convert to JPEG for better compression
+      maxSizeMB: 1,
+      maxWidthOrHeight: 500,
+      useWebWorker: true,
+      fileType: 'image/jpeg',
     };
 
     try {
-      const compressedFile = await imageCompression(file, options);
-      return compressedFile;
+      return await imageCompression(file, options);
     } catch (error) {
       console.error('Error compressing image:', error);
       throw new Error(t('validation.compressionError'));
@@ -62,84 +71,99 @@ export default function ProfileSection() {
   };
 
   const handleAvatarChange = async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) { // 5MB limit
-        setErrors({
-          ...errors,
-          avatar: t('validation.fileTooLarge'),
-        });
-        return;
-      }
-      
-      setIsCompressing(true);
-      try {
-        // Compress the image
-        const compressedFile = await compressImage(file);
-        
-        // Convert compressed file to base64
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64String = reader.result;
-          setProfileData({
-            ...profileData,
-            avatar: base64String,
-          });
-          setAvatarPreview(base64String);
-        };
-        reader.readAsDataURL(compressedFile);
-      } catch (error) {
-        setErrors({
-          ...errors,
-          avatar: error.message || t('validation.compressionError'),
-        });
-      } finally {
-        setIsCompressing(false);
-      }
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setErrors((prev) => ({
+        ...prev,
+        avatar: t('validation.fileTooLarge'),
+      }));
+      return;
+    }
+
+    setErrors((prev) => ({ ...prev, avatar: '' }));
+    setIsCompressing(true);
+    try {
+      const compressedFile = await compressImage(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result;
+        setProfileData((prev) => ({
+          ...prev,
+          avatar: base64String,
+        }));
+        setAvatarPreview(base64String);
+      };
+      reader.readAsDataURL(compressedFile);
+    } catch (error) {
+      setErrors((prev) => ({
+        ...prev,
+        avatar: error.message || t('validation.compressionError'),
+      }));
+    } finally {
+      setIsCompressing(false);
     }
   };
 
   const handleRemoveAvatar = () => {
-    setProfileData({
-      ...profileData,
+    setProfileData((prev) => ({
+      ...prev,
       avatar: null,
-    });
+    }));
     setAvatarPreview(null);
+    setErrors((prev) => ({ ...prev, avatar: '' }));
+  };
+
+  const handleCancel = () => {
+    setProfileData({
+      name: user.name || '',
+      avatar: user.avatar || null,
+    });
+    setAvatarPreview(user.avatar || null);
+    setErrors({});
+    setIsEditing(false);
   };
 
   const handleProfileUpdate = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
-    
+
     setIsSubmitting(true);
+    setErrors({});
     try {
-      // Get current user
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-      if (!currentUser) {
+      const {
+        data: { user: currentUser },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError || !currentUser) {
         throw new Error('No user found');
       }
 
-      // Update profile in profiles table
+      const trimmedName = profileData.name.trim();
+
       const { error: updateError } = await supabase
         .from('profiles')
         .update({
-          full_name: profileData.name,
+          full_name: trimmedName,
           avatar: profileData.avatar,
-          avatar_url: profileData.avatar
+          avatar_url: profileData.avatar,
         })
         .eq('id', currentUser.id);
 
       if (updateError) {
         console.error('Database update error:', updateError);
-        throw new Error('Failed to update profile information');
+        throw new Error(updateError.message || t('settings.profile.updateError'));
       }
 
-      // Update Redux store
-      dispatch(updateProfile({
-        name: profileData.name,
-        email: user.email,
-        avatar: profileData.avatar,
-      }));
+      dispatch(
+        updateProfile({
+          name: trimmedName,
+          email: user.email || currentUser.email,
+          avatar: profileData.avatar,
+        })
+      );
 
       setIsEditing(false);
     } catch (error) {
@@ -158,7 +182,7 @@ export default function ProfileSection() {
         <User size={24} className="text-blue-600 mr-2 sm:mr-3" />
         <h2 className="text-base sm:text-lg font-semibold text-gray-800">{t('settings.profile.title')}</h2>
       </div>
-      
+
       {isEditing ? (
         <form onSubmit={handleProfileUpdate} className="ml-7 sm:ml-9">
           <div className="mb-4">
@@ -169,9 +193,9 @@ export default function ProfileSection() {
               <div className="relative w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden mr-3 sm:mr-4">
                 {avatarPreview ? (
                   <>
-                    <img 
-                      src={avatarPreview} 
-                      alt="Profile" 
+                    <img
+                      src={avatarPreview}
+                      alt="Profile"
                       className="w-full h-full object-cover"
                     />
                     <button
@@ -191,10 +215,10 @@ export default function ProfileSection() {
                 <span className="text-xs sm:text-sm">
                   {isCompressing ? t('settings.profile.compressing') : t('settings.profile.change')}
                 </span>
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  onChange={handleAvatarChange} 
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarChange}
                   className="hidden"
                   disabled={isCompressing}
                 />
@@ -204,7 +228,7 @@ export default function ProfileSection() {
               <p className="mt-1 text-xs text-red-500">{errors.avatar}</p>
             )}
           </div>
-          
+
           <div className="mb-4">
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
               {t('settings.profile.name')}
@@ -220,11 +244,11 @@ export default function ProfileSection() {
               <p className="mt-1 text-xs text-red-500">{errors.name}</p>
             )}
           </div>
-          
+
           {errors.submit && (
             <p className="mb-4 text-xs text-red-500">{errors.submit}</p>
           )}
-          
+
           <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
             <button
               type="submit"
@@ -235,7 +259,7 @@ export default function ProfileSection() {
             </button>
             <button
               type="button"
-              onClick={() => setIsEditing(false)}
+              onClick={handleCancel}
               disabled={isSubmitting || isCompressing}
               className="w-full sm:w-auto bg-gray-200 text-gray-700 px-4 py-2 text-xs sm:text-sm rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -248,9 +272,9 @@ export default function ProfileSection() {
           <div className="flex items-center mb-4">
             <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden mr-3 sm:mr-4">
               {avatarPreview ? (
-                <img 
-                  src={avatarPreview} 
-                  alt="Profile" 
+                <img
+                  src={avatarPreview}
+                  alt="Profile"
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -262,8 +286,9 @@ export default function ProfileSection() {
               <p className="text-xs sm:text-sm text-gray-600">{user.email}</p>
             </div>
           </div>
-          
+
           <button
+            type="button"
             onClick={() => setIsEditing(true)}
             className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg text-xs sm:text-sm font-medium hover:bg-blue-100 transition-colors w-full sm:w-auto"
           >
@@ -273,4 +298,4 @@ export default function ProfileSection() {
       )}
     </div>
   );
-} 
+}

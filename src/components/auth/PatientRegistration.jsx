@@ -1,23 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useForm } from 'react-hook-form';
+import { useDispatch } from 'react-redux';
 import { User, Envelope, Lock, ArrowLeft } from 'phosphor-react';
 import { supabase } from '../../lib/supabase';
+import { ensureUserProfile } from '../../lib/authHelpers';
+import { updateUser } from '../../store/slices/userSlice';
 import LanguageSwitch from './LanguageSwitch';
 
 export default function PatientRegistration() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const dispatch = useDispatch();
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [userInfo, setUserInfo] = useState({
-    id: null,
-    email: null,
-    role: null,
-    avatar: null
-  });
+  const [needsConfirmation, setNeedsConfirmation] = useState(true);
+  const redirectTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+      }
+    };
+  }, []);
 
   const {
     register,
@@ -28,12 +36,12 @@ export default function PatientRegistration() {
 
   const password = watch('password');
 
-  const validatePassword = (password) => {
-    const hasUpperCase = /[A-Z]/.test(password);
-    const hasLowerCase = /[a-z]/.test(password);
-    const hasNumbers = /\d/.test(password);
-    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-    const isLongEnough = password.length >= 8;
+  const validatePassword = (value) => {
+    const hasUpperCase = /[A-Z]/.test(value);
+    const hasLowerCase = /[a-z]/.test(value);
+    const hasNumbers = /\d/.test(value);
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(value);
+    const isLongEnough = value.length >= 8;
 
     if (!isLongEnough || !hasUpperCase || !hasLowerCase || !hasNumbers || !hasSpecialChar) {
       return t('validation.passwordComplexity');
@@ -44,54 +52,75 @@ export default function PatientRegistration() {
   const onSubmit = async (data) => {
     setIsLoading(true);
     setError('');
-    
+
     try {
-      // Sign up with Supabase Auth
+      const normalizedEmail = data.email.trim().toLowerCase();
+      const trimmedName = data.fullName.trim();
+
+      // Sign up with Supabase Auth (include user metadata so DB trigger populates profiles)
       const { data: authData, error: signUpError } = await supabase.auth.signUp({
-        email: data.email,
+        email: normalizedEmail,
         password: data.password,
+        options: {
+          data: {
+            full_name: trimmedName,
+            role: 'patient',
+          },
+          emailRedirectTo: `${window.location.origin}/inscription`,
+        },
       });
 
       if (signUpError) {
+        console.error('Sign up error:', signUpError);
+        const msg = (signUpError.message || '').toLowerCase();
+        if (msg.includes('already registered') || msg.includes('already exists')) {
+          setError(t('auth.emailAlreadyExists'));
+        } else {
+          setError(signUpError.message || t('auth.registrationError'));
+        }
+        return;
+      }
+
+      if (!authData?.user?.id) {
         setError(t('auth.registrationError'));
         return;
       }
 
-      // Create or update the profile using upsert to avoid duplicate key error
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert([
-          {
-            id: authData.user.id,
-            full_name: data.fullName,
-            email: data.email,
-            role: 'patient',
-            avatar_url: null,
-            avatar: null
-          },
-        ]);
-
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
-        setError(t('auth.registrationError'));
+      // Supabase returns empty identities array if email is already registered (when email confirmation is enabled)
+      if (Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
+        setError(t('auth.emailAlreadyExists'));
         return;
       }
 
-      setSuccess(true);
-      
-      setUserInfo({
-        id: authData.user.id,
-        email: data.email,
-        role: 'patient',
-        avatar: null
-      });
-
-      setTimeout(() => {
-        navigate('/agenda');
-      }, 3000);
-
+      // If email confirmation is disabled, Supabase returns an active session right away
+      if (authData.session) {
+        const userData = await ensureUserProfile(authData.user, trimmedName);
+        dispatch(
+          updateUser({
+            id: userData.id,
+            email: userData.email,
+            name: userData.full_name || trimmedName,
+            role: userData.role,
+            avatar: userData.avatar,
+            isAuthenticated: true,
+          })
+        );
+        setNeedsConfirmation(false);
+        setSuccess(true);
+        redirectTimerRef.current = setTimeout(() => {
+          navigate('/agenda', { replace: true });
+        }, 1500);
+      } else {
+        // Email confirmation is required: DB trigger creates the profile, and ensureUserProfile covers fallback on login
+        setNeedsConfirmation(true);
+        setSuccess(true);
+        redirectTimerRef.current = setTimeout(() => {
+          navigate('/inscription', { replace: true });
+        }, 3000);
+      }
     } catch (err) {
-      setError(t('auth.registrationError'));
+      console.error('Registration error:', err);
+      setError(err.message || t('auth.registrationError'));
     } finally {
       setIsLoading(false);
     }
@@ -102,7 +131,8 @@ export default function PatientRegistration() {
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8 space-y-8">
         <div className="flex justify-between items-center">
           <button
-            onClick={() => navigate(-1)}
+            type="button"
+            onClick={() => navigate('/inscription')}
             className="text-gray-600 hover:text-gray-900"
           >
             <ArrowLeft size={24} />
@@ -133,9 +163,11 @@ export default function PatientRegistration() {
                 <h3 className="text-sm font-medium text-green-800">
                   {t('auth.registrationSuccess')}
                 </h3>
-                <p className="text-sm text-green-700 mt-1">
-                  {t('auth.confirmationEmailSent')}
-                </p>
+                {needsConfirmation && (
+                  <p className="text-sm text-green-700 mt-1">
+                    {t('auth.confirmationEmailSent')}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -223,7 +255,6 @@ export default function PatientRegistration() {
                 {errors.password && (
                   <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
                 )}
-               
               </div>
 
               <div>
@@ -268,4 +299,4 @@ export default function PatientRegistration() {
       </div>
     </div>
   );
-} 
+}

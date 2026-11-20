@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Check, User, Note } from 'phosphor-react';
 import { format, parseISO } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { v4 as uuidv4 } from 'uuid';
 
 export default function AppointmentRequests() {
   const { t } = useTranslation();
@@ -11,54 +10,60 @@ export default function AppointmentRequests() {
   const [selectedNote, setSelectedNote] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [processingId, setProcessingId] = useState(null);
 
-  // Fetch appointment requests
-  useEffect(() => {
-    const fetchRequests = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('rendez_vous')
-          .select(`
-            *,
-            patient:patient_id (
-              id,
-              email,
-              full_name,
-              avatar_url
-            )
-          `)
-          .eq('statut', 'en_attente')
-          .order('date_heure', { ascending: true });
+  const fetchRequests = useCallback(async (showSpinner = false) => {
+    try {
+      if (showSpinner) setLoading(true);
+      const { data, error: fetchError } = await supabase
+        .from('rendez_vous')
+        .select(`
+          *,
+          patient:profiles!rendez_vous_patient_id_fkey (
+            id,
+            email,
+            full_name,
+            avatar_url,
+            avatar
+          )
+        `)
+        .eq('statut', 'en_attente')
+        .order('date_heure', { ascending: true });
 
-        if (error) throw error;
+      if (fetchError) throw fetchError;
 
-        const transformedRequests = data.map(request => ({
-          id: request.id,
-          patientId: request.patient_id,
-          patientName: request.patient_full_name,
-          profilePicture: request.patient?.avatar_url,
-          date: request.date_heure,
-          type: request.type_rendez_vous,
-          status: request.statut,
-          note: request.note,
-          telephone: request.telephone
-        }));
+      const transformedRequests = (data || []).map(request => ({
+        id: request.id,
+        patientId: request.patient_id,
+        patientName: request.patient_full_name || request.patient?.full_name || request.patient?.email || 'Patient',
+        profilePicture: request.patient?.avatar || request.patient?.avatar_url || null,
+        date: request.date_heure,
+        type: request.type_rendez_vous,
+        status: request.statut,
+        note: request.note,
+        telephone: request.telephone
+      }));
 
-        setRequests(transformedRequests);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchRequests();
+      setRequests(transformedRequests);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchRequests(true);
+    const interval = setInterval(() => fetchRequests(false), 30000);
+    return () => clearInterval(interval);
+  }, [fetchRequests]);
 
   // Handle appointment action (accept or decline)
   const handleAppointmentAction = async (requestId, action) => {
+    if (processingId) return;
+    setProcessingId(requestId);
     try {
-      // Update appointment status
       const { error: updateError } = await supabase
         .from('rendez_vous')
         .update({ statut: action === 'accept' ? 'accepte' : 'refuse' })
@@ -66,13 +71,14 @@ export default function AppointmentRequests() {
 
       if (updateError) throw updateError;
 
-      // Update local state
-      setRequests(prevRequests => 
+      setRequests(prevRequests =>
         prevRequests.filter(request => request.id !== requestId)
       );
     } catch (err) {
       console.error('Error handling appointment action:', err);
       setError(err.message);
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -93,7 +99,7 @@ export default function AppointmentRequests() {
     const monthIndex = date.getMonth();
     const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-    
+
     return `${t(`agenda.days.${days[dayIndex]}`)} ${format(date, 'd')} ${t(`agenda.months.${months[monthIndex]}`)} ${format(date, 'yyyy')} ${format(date, 'HH:mm')}`;
   };
 
@@ -128,7 +134,7 @@ export default function AppointmentRequests() {
         ) : (
           <div className="space-y-4 w-full">
             {requests.map(request => (
-              <div 
+              <div
                 key={request.id}
                 className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-4"
               >
@@ -136,9 +142,9 @@ export default function AppointmentRequests() {
                 <div className="flex items-center w-full sm:w-1/3">
                   <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden mr-3">
                     {request.profilePicture ? (
-                      <img 
-                        src={request.profilePicture} 
-                        alt={request.patientName} 
+                      <img
+                        src={request.profilePicture}
+                        alt={request.patientName}
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -170,13 +176,15 @@ export default function AppointmentRequests() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleAppointmentAction(request.id, 'accept')}
-                    className="p-2 text-green-600 hover:bg-green-50 rounded-full"
+                    disabled={processingId === request.id}
+                    className="p-2 text-green-600 hover:bg-green-50 rounded-full disabled:opacity-50"
                   >
                     <Check size={24} />
                   </button>
                   <button
                     onClick={() => handleAppointmentAction(request.id, 'decline')}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-full"
+                    disabled={processingId === request.id}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-full disabled:opacity-50"
                   >
                     <X size={24} />
                   </button>
@@ -206,4 +214,4 @@ export default function AppointmentRequests() {
       )}
     </div>
   );
-} 
+}

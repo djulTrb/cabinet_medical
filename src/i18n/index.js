@@ -12,10 +12,13 @@ i18n
       fr: { translation: fr },
       ar: { translation: ar },
     },
+    supportedLngs: ['fr', 'ar'],
+    nonExplicitSupportedLngs: true,
+    load: 'languageOnly',
     fallbackLng: 'fr',
     interpolation: {
       escapeValue: false,
     },
   });
 
-export default i18n; 
+export default i18n;
