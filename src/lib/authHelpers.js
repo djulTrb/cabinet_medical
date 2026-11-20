@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const DOCTOR_EMAIL = (import.meta.env.VITE_DOCTOR_EMAIL || '').trim().toLowerCase();
+const DOCTOR_EMAIL = (import.meta.env.VITE_DOCTOR_EMAIL || 'cabinetmedical2025@cab.med').trim().toLowerCase();
 
 export const normalizeRole = (role) => {
   const value = (role || '').toString().trim().toLowerCase();
